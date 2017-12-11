@@ -1,12 +1,19 @@
-from base import BaseAGSServer
-from layer import FeatureLayer, TableLayer
-import filters
-import geometry
-import common
+from .._abstract.abstract import BaseAGSServer, DynamicData, BaseSecurityHandler
 import layer
+from ..common.general import Feature
+from layer import FeatureLayer, TableLayer, RasterLayer
+from ..common import filters, geometry
+from ..security import security
+import json
+import time
+from ..common.geometry import Polygon
+import tempfile
+from _geoprocessing import GPJob
 ########################################################################
 class MapService(BaseAGSServer):
     """ contains information about a map service """
+    _json = None
+    _json_dict = None
     _tileInfo = None
     _url = None
     _username = None
@@ -40,43 +47,99 @@ class MapService(BaseAGSServer):
     _timeInfo = None
     _maxExportTilesCount = None
     _hasVersionedData = None
+    _securityHandler = None
+    _proxy_url = None
+    _proxy_port = None
     #----------------------------------------------------------------------
-    def __init__(self, url, token_url=None, username=None, password=None,
-                 initialize=False, proxy_url=None, proxy_port=None):
+    def __init__(self, url, securityHandler=None,
+                 initialize=False, proxy_url=None,
+                 proxy_port=None):
         """Constructor"""
-        self._url = url 
-        self._token_url = token_url 
-        self._username = username
-        self._password = password
-        if not username is None and \
-           not password is None and \
-           not username is "" and \
-           not password is "":
-            if not token_url is None:
-                res = self.generate_token(tokenURL=token_url,
-                                              proxy_port=proxy_port,
-                                            proxy_url=proxy_url)
-            else:   
-                res = self.generate_token(proxy_port=self._proxy_port,
-                                                       proxy_url=self._proxy_url)                
-            if res is None:
-                print "Token was not generated"
-            elif 'error' in res:
-                print res
-            else:
-                self._token = res[0]
+        self._proxy_url= proxy_url
+        self._proxy_port = proxy_port
+        self._url = url
+        if securityHandler is not None and \
+           isinstance(securityHandler, (security.AGSTokenSecurityHandler,
+                                        security.PortalServerSecurityHandler,
+                                        security.ArcGISTokenSecurityHandler)):
+            self._securityHandler = securityHandler
+        if not securityHandler is None:
+            self._referer_url = securityHandler.referer_url
+            self._token = securityHandler.token
+        elif securityHandler is None:
+            pass
+        else:
+            raise AttributeError("Security Handler must type of security.AGSTokenSecurityHandler")
         if initialize:
             self.__init()
     #----------------------------------------------------------------------
+    @property
+    def itemInfo(self):
+        """gets the item's info"""
+        params = {
+            "f" : "json"
+        }
+        if not self._securityHandler is None:
+            params['token'] = self._securityHandler.token
+        url = self._url + "/info/iteminfo"
+        return self._do_get(url=url, param_dict=params,
+                            proxy_url=self._proxy_url,
+                            proxy_port=self._proxy_port)
+    #----------------------------------------------------------------------
+    def downloadThumbnail(self, outPath):
+        """downloads the items's thumbnail"""
+        url = self._url + "/info/thumbnail"
+        params = {
+
+        }
+        if not self._securityHandler is None:
+            params['token']  = self._securityHandler.token
+        return self._download_file(url=url,
+                            save_path=outPath,
+                            file_name=None,
+                            param_dict=params,
+                            proxy_url=self._proxy_url,
+                            proxy_port=self._proxy_port)
+    #----------------------------------------------------------------------
+    def downloadMetadataFile(self, outPath):
+        """downloads the metadata file to a given path"""
+        fileName = "metadata.xml"
+        url = self._url + "/info/metadata"
+        params = {}
+        if not self._securityHandler is None:
+            params['token']  = self._securityHandler.token
+        return self._download_file(url=url,
+                                   save_path=outPath,
+                                   file_name=fileName,
+                                   param_dict=params,
+                                   proxy_url=self._proxy_url,
+                                   proxy_port=self._proxy_port)
+    #----------------------------------------------------------------------
+    def __str__(self):
+        """gets the object as as string"""
+        if self._json is None:
+            self.__init()
+        return self._json
+    #----------------------------------------------------------------------
+    @property
+    def json_dict(self):
+        """returns object as a dictionary"""
+        if self._json_dict is None:
+            self.__init()
+        return self._json_dict
+    #----------------------------------------------------------------------
     def __init(self):
         """ populates all the properties for the map service """
-        if self._token is None:
-            param_dict = {"f": "json"}
-        else:
-            param_dict = {"f": "json",
-                          "token" : self._token
-                          }
-        json_dict = self._do_get(self._url, param_dict)
+
+        params = {"f": "json"}
+        if self._securityHandler is not None:
+            params['token'] = self._securityHandler.token
+
+        json_dict = self._do_get(self._url, params,
+                                 proxy_port=self._proxy_port,
+                                 proxy_url=self._proxy_url)
+        self._json = json.dumps(json_dict)
+        self._json_dict = json_dict
         attributes = [attr for attr in dir(self)
                       if not attr.startswith('__') and \
                       not attr.startswith('_')]
@@ -84,11 +147,12 @@ class MapService(BaseAGSServer):
             if k == "tables":
                 self._tables = []
                 for tbl in v:
+                    url = self._url + "/%s" % tbl['id']
                     self._tables.append(
                         layer.TableLayer(url,
-                                         token_url=self._token_url,
-                                         username=self._username,
-                                         password=self._password)
+                                         securityHandler=self._securityHandler,
+                                         proxy_port=self._proxy_port,
+                                         proxy_url=self._proxy_url)
                     )
             elif k == "layers":
                 self._layers = []
@@ -98,23 +162,23 @@ class MapService(BaseAGSServer):
                     if layer_type == "Feature Layer":
                         self._layers.append(
                             layer.FeatureLayer(url,
-                                               token_url=self._token_url,
-                                               username=self._username,
-                                               password=self._password)
+                                               securityHandler=self._securityHandler,
+                                               proxy_port=self._proxy_port,
+                                               proxy_url=self._proxy_url)
                         )
                     elif layer_type == "Raster Layer":
                         self._layers.append(
                             layer.RasterLayer(url,
-                                               token_url=self._token_url,
-                                               username=self._username,
-                                               password=self._password)
+                                         securityHandler=self._securityHandler,
+                                         proxy_port=self._proxy_port,
+                                         proxy_url=self._proxy_url)
                         )
                     elif layer_type == "Group Layer":
                         self._layers.append(
                             layer.GroupLayer(url,
-                                             token_url=self._token_url,
-                                             username=self._username,
-                                             password=self._password)
+                                             securityHandler=self._securityHandler,
+                                             proxy_port=self._proxy_port,
+                                             proxy_url=self._proxy_url)
                         )
                     else:
                         print 'Type %s is not implemented' % layer_type
@@ -123,6 +187,24 @@ class MapService(BaseAGSServer):
 
             else:
                 print k, " is not implemented for mapservice."
+    #----------------------------------------------------------------------
+    @property
+    def securityHandler(self):
+        """ gets the security handler """
+        return self._securityHandler
+    #----------------------------------------------------------------------
+    @securityHandler.setter
+    def securityHandler(self, value):
+        """ sets the security handler """
+        if isinstance(value, BaseSecurityHandler):
+            if isinstance(value, security.AGSTokenSecurityHandler):
+                self._securityHandler = value
+                self._token = value.token
+            else:
+                pass
+        elif value is None:
+            self._securityHandler = None
+
     #----------------------------------------------------------------------
     @property
     def maxExportTilesCount(self):
@@ -327,8 +409,8 @@ class MapService(BaseAGSServer):
         params = {
             "f" : "json"
         }
-        if self._token is not None:
-            params['token'] = self._token
+        if self._securityHandler is not None:
+            params['token'] = self._securityHandler.token
         res = self._do_get(url, param_dict=params)
         return_dict = {
             "layers" : [],
@@ -339,17 +421,17 @@ class MapService(BaseAGSServer):
                 for val in v:
                     return_dict['layers'].append(
                         layer.FeatureLayer(url=self._url + "/%s" % val['id'],
-                                           token_url=self._token_url,
-                                           username=self._username,
-                                           password=self._password)
+                                           securityHandler=self._securityHandler,
+                                           proxy_url=self._proxy_url,
+                                           proxy_port=self._proxy_port)
                     )
             elif k == "tables":
                 for val in v:
                     return_dict['tables'].append(
                         layer.TableLayer(url=self._url + "/%s" % val['id'],
-                                           token_url=self._token_url,
-                                           username=self._username,
-                                           password=self._password)
+                                           securityHandler=self._securityHandler,
+                                           proxy_url=self._proxy_url,
+                                           proxy_port=self._proxy_port)
                     )
             del k,v
         return return_dict
@@ -379,13 +461,12 @@ class MapService(BaseAGSServer):
             "gdbVersion" : gdbVersion,
             "layers" : layers
         }
-        if not self._token is None and \
-           self._token != "":
-            params['token'] = self._token
+        if self._securityHandler is not None:
+            params['token'] = self._securityHandler.token
         res = self._do_get(url, params)
         qResults = []
         for r in res['results']:
-            qResults.append(common.Feature(r))
+            qResults.append(Feature(r))
         print 'stop'
         return qResults
     #----------------------------------------------------------------------
@@ -394,8 +475,8 @@ class MapService(BaseAGSServer):
         params={
             "f" : "json"
         }
-        if self._token is not None:
-            params['token'] = self._token
+        if self._securityHandler is not None:
+            params['token'] = self._securityHandler.token
         res = self._do_get(url=url, param_dict=params)
         return res['type']
     #----------------------------------------------------------------------
@@ -414,9 +495,11 @@ class MapService(BaseAGSServer):
                 "source" : dynamicLayer.asDictionary
             }
         }
-        return common.Feature(
+        return Feature(
             json_string=self._do_get(url=url,
-                                     param_dict=params)
+                                     param_dict=params,
+                                     proxy_port=self._proxy_port,
+                                     proxy_url=self._proxy_url)
         )
     #----------------------------------------------------------------------
     def identify(self,
@@ -477,12 +560,11 @@ class MapService(BaseAGSServer):
                  'layers' : layers,
                  'layerOptions': layerOptions
                  }
-        if self._token is not None:
-            params['token'] = self._token
+        if self._securityHandler is not None:
+            params['token'] = self._securityHandler.token
         import urllib
         url = kmlURL + "?%s" % urllib.urlencode(params)
         return self._download_file(url, save_location, docName + ".kmz")
-        #return self._do_get(url, param_dict)
     #----------------------------------------------------------------------
     def exportMap(self,
                   bbox,
@@ -559,8 +641,8 @@ class MapService(BaseAGSServer):
         params = {
             "f" : "json"
         }
-        if self._token is not None:
-            params['token'] = self._token
+        if self._securityHandler is not None:
+            params['token'] = self._securityHandler.token
         if isinstance(bbox, geometry.Envelope):
             vals = bbox.asDictionary
             params['bbox'] = "%s,%s,%s,%s" % (vals['xmin'], vals['ymin'],
@@ -589,7 +671,7 @@ class MapService(BaseAGSServer):
             if layerTimeOptions is not None:
                 params['layerTimeOptions'] = layerTimeOptions
             if dynamicLayers is not None and \
-               isinstance(dynamicLayers, base.DynamicData):
+               isinstance(dynamicLayers, DynamicData):
                 params['dynamicLayers'] = dynamicLayers.asDictionary
             if mapScale is not None:
                 params['mapScale'] = mapScale
@@ -598,4 +680,266 @@ class MapService(BaseAGSServer):
                                 param_dict=params)
         else:
             return None
+    #----------------------------------------------------------------------
+    def estimateExportTilesSize(self,
+                                exportBy,
+                                levels,
+                                tilePackage=False,
+                                exportExtent="DEFAULTEXTENT",
+                                areaOfInterest=None,
+                                async=True):
+        """
+        The estimateExportTilesSize operation is an asynchronous task that
+        allows estimation of the size of the tile package or the cache data
+        set that you download using the Export Tiles operation. This
+        operation can also be used to estimate the tile count in a tile
+        package and determine if it will exceced the maxExportTileCount
+        limit set by the administrator of the service. The result of this
+        operation is Map Service Job. This job response contains reference
+        to Map Service Result resource that returns the total size of the
+        cache to be exported (in bytes) and the number of tiles that will
+        be exported.
+
+        Inputs:
+
+        tilePackage - Allows estimating the size for either a tile package
+         or a cache raster data set. Specify the value true for tile
+         packages format and false for Cache Raster data set. The default
+         value is False
+           Values: True | False
+        exportExtent - The extent (bounding box) of the tile package or the
+         cache dataset to be exported. If extent does not include a spatial
+         reference, the extent values are assumed to be in the spatial
+         reference of the map. The default value is full extent of the
+         tiled map service.
+	   Syntax: <xmin>, <ymin>, <xmax>, <ymax>
+           Example 1: -104,35.6,-94.32,41
+        exportBy - The criteria that will be used to select the tile
+         service levels to export. The values can be Level IDs, cache scales
+         or the Resolution (in the case of image services).
+	   Values: LevelID | Resolution | Scale
+        levels - Specify the tiled service levels for which you want to get
+         the estimates. The values should correspond to Level IDs, cache
+         scales or the Resolution as specified in exportBy parameter. The
+         values can be comma separated values or a range.
+	   Example 1: 1,2,3,4,5,6,7,8,9
+	   Example 2: 1-4,7-9
+        areaOfInterest - (Optional) The areaOfInterest polygon allows
+         exporting tiles within the specified polygon areas. This parameter
+         supersedes exportExtent parameter. Also excepts geometry.Polygon.
+	   Example: { "features": [{"geometry":{"rings":[[[-100,35],
+             [-100,45],[-90,45],[-90,35],[-100,35]]],
+             "spatialReference":{"wkid":4326}}}]}
+        async - (optional) the estimate function is run asynchronously
+         requiring the tool status to be checked manually to force it to
+         run synchronously the tool will check the status until the
+         estimation completes.  The default is True, which means the status
+         of the job and results need to be checked manually.  If the value
+         is set to False, the function will wait until the task completes.
+           Values: True | False
+        """
+        url = self._url + "/estimateExportTilesSize"
+        params = {
+            "f" : "json",
+            "levels" : levels,
+            "exportBy" : exportBy,
+            "tilePackage" : tilePackage,
+            "exportExtent" : exportExtent
+        }
+        if not self._securityHandler is None:
+            params['token'] = self._securityHandler.token
+        params["levels"] = levels
+        if not areaOfInterest is None:
+            if isinstance(areaOfInterest, Polygon):
+                template = { "features": [areaOfInterest.asDictionary]}
+                params['areaOfInterest'] = template
+            else:
+                params['areaOfInterest'] = areaOfInterest
+        if async == True:
+            return self._do_get(url=url,
+                                param_dict=params,
+                                proxy_url=self._proxy_url,
+                                proxy_port=self._proxy_port)
+        else:
+            exportJob = self._do_get(url=url,
+                                     param_dict=params,
+                                     proxy_url=self._proxy_url,
+                                     proxy_port=self._proxy_port)
+            jobUrl = "%s/jobs/%s" % (url, exportJob['jobId'])
+            gpJob = GPJob(url=jobUrl,
+                          securityHandler=self._securityHandler,
+                          proxy_port=self._proxy_port,
+                          proxy_url=self._proxy_url)
+            status = gpJob.jobStatus
+            while status != "esriJobSucceeded":
+                if status in ['esriJobFailed',
+                              'esriJobCancelling',
+                              'esriJobCancelled']:
+                    return gpJob.messages
+                else:
+                    time.sleep(5)
+                    status = gpJob.jobStatus
+            return gpJob.getAllResults['out_service_url']['value']
+    #----------------------------------------------------------------------
+    def exportTiles(self,
+                    levels,
+                    exportBy="LevelID",
+                    tilePackage=False,
+                    exportExtent="DEFAULT",
+                    optimizeTilesForSize=True,
+                    compressionQuality=0,
+                    areaOfInterest=None,
+                    async=False
+                    ):
+        """
+        The exportTiles operation is performed as an asynchronous task and
+        allows client applications to download map tiles from a server for
+        offline use. This operation is performed on a Map Service that
+        allows clients to export cache tiles. The result of this operation
+        is Map Service Job. This job response contains a reference to the
+        Map Service Result resource, which returns a URL to the resulting
+        tile package (.tpk) or a cache raster dataset.
+        exportTiles can be enabled in a service by using ArcGIS for Desktop
+        or the ArcGIS Server Administrator Directory. In ArcGIS for Desktop
+        make an admin or publisher connection to the server, go to service
+        properties, and enable Allow Clients to Export Cache Tiles in the
+        advanced caching page of the Service Editor. You can also specify
+        the maximum tiles clients will be allowed to download. The default
+        maximum allowed tile count is 100,000. To enable this capability
+        using the Administrator Directory, edit the service, and set the
+        properties exportTilesAllowed=true and maxExportTilesCount=100000.
+
+        At 10.2.2 and later versions, exportTiles is supported as an
+        operation of the Map Server. The use of the
+        http://Map Service/exportTiles/submitJob operation is deprecated.
+        You can provide arguments to the exportTiles operation as defined
+        in the following parameters table:
+
+        Inputs:
+         exportBy - The criteria that will be used to select the tile
+           service levels to export. The values can be Level IDs, cache
+           scales. or the resolution (in the case of image services).
+	   Values: LevelID | Resolution | Scale
+        levels - Specifies the tiled service levels to export. The values
+          should correspond to Level IDs, cache scales. or the resolution
+          as specified in exportBy parameter. The values can be comma
+          separated values or a range. Make sure tiles are present at the
+          levels where you attempt to export tiles.
+	   Example 1: 1,2,3,4,5,6,7,8,9
+	   Example 2: 1-4,7-9
+        tilePackage - Allows exporting either a tile package or a cache
+          raster data set. If the value is true, output will be in tile
+          package format, and if the value is false, a cache raster data
+          set is returned. The default value is false
+	   Values: true | false
+        exportExtent - The extent (bounding box) of the tile package or the
+          cache dataset to be exported. If extent does not include a
+          spatial reference, the extent values are assumed to be in the
+          spatial reference of the map. The default value is full extent of
+          the tiled map service.
+                       Syntax: <xmin>, <ymin>, <xmax>, <ymax>
+                       Example 1: -104,35.6,-94.32,41
+                       Example 2: {"xmin" : -109.55, "ymin" : 25.76,
+                        "xmax" : -86.39, "ymax" : 49.94,
+                        "spatialReference" : {"wkid" : 4326}}
+        optimizeTilesForSize - (Optional) Use this parameter to enable
+          compression of JPEG tiles and reduce the size of the downloaded
+          tile package or the cache raster data set. Compressing tiles
+          slightly compromises the quality of tiles but helps reduce the
+          size of the download. Try sample compressions to determine the
+          optimal compression before using this feature.
+	   Values: true | false
+        compressionQuality - (Optional) When optimizeTilesForSize=true, you
+         can specify a compression factor. The value must be between 0 and
+         100. The value cannot be greater than the default compression
+         already set on the original tile. For example, if the default
+         value is 75, the value of compressionQuality must be between 0 and
+         75. A value greater than 75 in this example will attempt to up
+         sample an already compressed tile and will further degrade the
+         quality of tiles.
+        areaOfInterest - (Optional) The areaOfInterest polygon allows
+         exporting tiles within the specified polygon areas. This parameter
+         supersedes the exportExtent parameter. Must be geometry.Polygon
+         object.
+        Example: { "features": [{"geometry":{"rings":[[[-100,35],
+         [-100,45],[-90,45],[-90,35],[-100,35]]],
+         "spatialReference":{"wkid":4326}}}]}
+        async - default True, this value ensures the returns are returned
+         to the user instead of the user having the check the job status
+         manually.
+        """
+        params = {
+            "f" : "json",
+            "tilePackage" : tilePackage,
+            "exportExtent" : exportExtent,
+            "optimizeTilesForSize" : optimizeTilesForSize,
+            "compressionQuality" : compressionQuality,
+            "exportBy" : exportBy,
+            "levels" : levels
+        }
+        url = self._url + "/exportTiles"
+        if not self._securityHandler is None:
+            params['token'] = self._securityHandler.token
+        if isinstance(areaOfInterest, Polygon):
+            geom = areaOfInterest.asDictionary()
+            template = { "features": [geom]}
+            params["areaOfInterest"] = template
+        if async == True:
+            return self._do_get(url=url, param_dict=params,
+                            proxy_url=self._proxy_url,
+                            proxy_port=self._proxy_port)
+        else:
+            exportJob = self._do_get(url=url, param_dict=params,
+                            proxy_url=self._proxy_url,
+                            proxy_port=self._proxy_port)
+            jobUrl = "%s/jobs/%s" % (url, exportJob['jobId'])
+            gpJob = GPJob(url=jobUrl,
+                          securityHandler=self._securityHandler,
+                          proxy_port=self._proxy_port,
+                          proxy_url=self._proxy_url)
+            status = gpJob.jobStatus
+            while status != "esriJobSucceeded":
+                if status in ['esriJobFailed',
+                                       'esriJobCancelling',
+                                       'esriJobCancelled']:
+                    return None
+                else:
+                    time.sleep(5)
+                    status = gpJob.jobStatus
+            allResults = gpJob.getAllResults
+            for k,v in allResults.iteritems():
+                if k == "out_service_url":
+                    value = v['value']
+                    params = {
+                        "f" : "json"
+                    }
+                    if not self._securityHandler is None:
+                        params['token'] = self._securityHandler.token
+                    gpRes = self._do_get(url=v['value'],
+                                         param_dict=params,
+                                         proxy_url=self._proxy_url,
+                                         proxy_port=self._proxy_port)
+                    if tilePackage == True:
+                        files = []
+                        for f in gpRes['files']:
+                            name = f['name']
+                            dlURL = f['url']
+                            files.append(
+                                self._download_file(url=dlURL,
+                                                    save_path=tempfile.gettempdir(),
+                                                    file_name=name,
+                                                    param_dict=params,
+                                                    proxy_url=self._proxy_url,
+                                                    proxy_port=self._proxy_port)
+                            )
+                        return files
+                    else:
+                        return gpRes['folders']
+                else:
+                    return None
+
+
+
+
+
 

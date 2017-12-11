@@ -1,4 +1,14 @@
-import ags
 import agol
+import ags
+from security import *
+from common import *
+import _abstract
+import web
+import manageorg
+import manageags
+import manageportal
+import hostedservice
 #import webmap
-__version__ = "1.1.0"
+from geometryservice import *
+from enrichment import GeoEnrichment
+__version__ = "2.0.120a"

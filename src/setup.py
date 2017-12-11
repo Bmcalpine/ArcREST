@@ -6,7 +6,13 @@ setup(
     license='Apache',
     url='www.github.com/Esri/ArcREST',
     name='ArcREST',
-    version='1.0.7',
-    packages=['arcrest','arcrest/agol', 'arcrest/ags'],
+    version='2.1.100',
+    packages=['arcresthelper','arcresthelper/_abstract',
+              'arcrest','arcrest/agol','arcrest/agol/helperservices', 'arcrest/ags', 'arcrest/common',
+              'arcrest/manageorg', 'arcrest/security', 'arcrest/web',
+              'arcrest/_abstract', 'arcrest/webmap', 'arcrest/geometryservice',
+              'arcrest/manageags', 'arcrest/manageportal', 'arcrest/hostedservice',
+              'arcrest/enrichment'],
+    package_data = {'arcrest/enrichment' : ['__countrycodes.csv', '__datacollectionnames.csv']},
     package_dir={'':''}
     )

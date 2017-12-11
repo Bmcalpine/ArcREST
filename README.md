@@ -1,4 +1,5 @@
-# ArcREST
+# ArcREST Version 2
+*If you are using an older version(v1) of ArcRest, you can find it here:https://github.com/Esri/ArcREST/tree/October2014v1.0Final
  
 A set of python tools to assist working with ArcGIS REST API for ArcGIS Server (AGS) ,ArcGIS Online (AGOL), and ArcGIS WebMap JSON.  
 
@@ -58,5 +59,5 @@ limitations under the License.
 A copy of the license is available in the repository's
 [LICENSE](LICENSE) file.
 
-[](Esri Tags: AGS AGOL ArcGIS Server ArcGIS Online)
+[](Esri Tags: AGS AGOL ArcGIS Server ArcGIS Online Utilities Telecommunications ArcGISSolutions)
 [](Esri Language: Python)

@@ -1,18 +1,12 @@
-import utilities
-import naservice
-import mobileservice
-import mapservice
-import layer
-import imageservice
-import gpservice
-import globeservice
-import geometryservice
-import geometry
-import geodataservice
-import geocodeservice
-import filters
-import featureservice
-import common
-import catalog
-import base
-import administration
+from featureservice import *
+from mapservice import *
+from layer import *
+from _geoprocessing import *
+from _gpobjects import *
+from _imageservice import ImageService
+from _uploads import Uploads
+from _globeservice import GlobeService, GlobeServiceLayer
+from _mobileservice import MobileService, MobileServiceLayer
+from _geodataservice import GeoDataService
+from _geocodeservice import GeocodeService
+__version__ = "2.0.120"
